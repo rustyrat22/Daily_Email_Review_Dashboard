@@ -1,0 +1,11 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATA_DIR=/data
+      - LABEL_CSV=/data/label naming.csv
+    restart: unless-stopped

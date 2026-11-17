@@ -1,0 +1,9 @@
+# Ignore text files whose names start with 1a0a in the data folder
+/data/1a0a*.txt
+
+# Ignore everything in the data/temp data folder
+/data/temp data/
+
+# Ignore all CSV files, except "label naming.csv"
+*.csv
+!label naming.csv
