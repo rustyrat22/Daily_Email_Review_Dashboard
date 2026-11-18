@@ -45,6 +45,12 @@ _GLASSDOOR_JOB_RE = re.compile(
     r"(?P<title>.+?)\s+at\s+(?P<company>.+?)\s+and\s+\d+\s+more job", re.IGNORECASE
 )
 _GLASSDOOR_HIRING_RE = re.compile(r"(?P<company>.+?)\s+is hiring", re.IGNORECASE)
+_SUBJECT_HAS_OPENING_RE = re.compile(
+    r"(?P<company>.+?)\s+has a\s+(?P<title>.+?)\s+opening", re.IGNORECASE
+)
+_SUBJECT_MAY_HIRE_RE = re.compile(
+    r"^[^,]+,\s*(?P<company>.+?)\s+may want to hire you", re.IGNORECASE
+)
 
 _UNKNOWN = "Unknown"
 _UNKNOWN_SALARY = _UNKNOWN
@@ -177,14 +183,9 @@ def _parse_job_block(lines, date, subject):
     # carry "Compensation: ..." in Indeed alert emails.
     salary = _find_salary(lines[2:]) or _find_salary([title_line])
 
-    return {
-        "date_of_email": date,
-        "job_title": title,
-        "company": company,
-        "salary": _salary_or_unknown(salary),
-        "url": _find_url(lines, job_url_only=True),
-        "subject_from_email": subject,
-    }
+    return _make_job(
+        date, subject, title, company, salary, _find_url(lines, job_url_only=True)
+    )
 
 
 def parse_ziprecruiter_email(email_text):
@@ -241,12 +242,29 @@ def parse_job_emails(email_text):
     msg, _, _ = _message(email_text)
     site = _source_site(msg)
     if site == "ziprecruiter":
-        return parse_ziprecruiter_email(email_text)
-    if site == "david":
-        return parse_david_careers_email(email_text)
-    if site == "glassdoor":
-        return parse_glassdoor_email(email_text)
-    return parse_indeed_job_emails(email_text)
+        jobs = parse_ziprecruiter_email(email_text)
+    elif site == "david":
+        jobs = parse_david_careers_email(email_text)
+    elif site == "glassdoor":
+        jobs = parse_glassdoor_email(email_text)
+    else:
+        jobs = parse_indeed_job_emails(email_text)
+    return jobs or parse_subject_only_email(email_text)
+
+
+def parse_subject_only_email(email_text):
+    """Return one best-effort job row from an alert with no structured job blocks."""
+    msg, subject, date = _message(email_text)
+    title, company = _UNKNOWN, _UNKNOWN
+    match = _SUBJECT_HAS_OPENING_RE.search(subject)
+    if match:
+        company = match.group("company").strip()
+        title = match.group("title").strip()
+    else:
+        match = _SUBJECT_MAY_HIRE_RE.search(subject)
+        if match:
+            company = match.group("company").strip()
+    return [_make_job(date, subject, title, company, "", "")]
 
 
 def parse_indeed_job_email(email_text):
@@ -256,14 +274,14 @@ def parse_indeed_job_email(email_text):
     subject_title, subject_company = _split_subject(subject)
     body_title, body_company = _find_title_company_from_body(lines)
 
-    return {
-        "date_of_email": date,
-        "job_title": subject_title or body_title,
-        "company": subject_company or body_company,
-        "salary": _salary_or_unknown(_find_salary(lines)),
-        "url": _find_url(lines),
-        "subject_from_email": subject,
-    }
+    return _make_job(
+        date,
+        subject,
+        subject_title or body_title,
+        subject_company or body_company,
+        _find_salary(lines),
+        _find_url(lines),
+    )
 
 
 def parse_indeed_job_alert_email(email_text):

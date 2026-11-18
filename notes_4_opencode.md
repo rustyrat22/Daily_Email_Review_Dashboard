@@ -221,7 +221,20 @@ next/prev within bounds.
 
 - (current, branch `separate_sites`) Added/expanded `app/parse_job_emails.py`
   for extracting job details from Indeed, ZipRecruiter, David Careers, and
-  Glassdoor emails; not yet connected to the UI.
+  Glassdoor emails. In the Development view the **Messages** table is populated
+  only from `data/site_emails/` and its sub-folders (recursive `*.txt` glob),
+  never from the root email dumps/CSVs. Columns are exactly Date of Email,
+  Company, Job Title, Salary, URL, Subject of Email; the separate "Job Listings"
+  section was removed. Cached `load_job_listings`, Site filter, search, and
+  Refresh jobs apply; Email detail/Overview still use the email dumps, and
+  Development no longer `st.stop()`s when those are absent. Added
+  `parse_subject_only_email(text)` fallback so subject-only alerts (e.g. the two
+  ZipRecruiter "TEKsystems has a ... opening" / "may want to hire you" emails)
+  still produce a row. Verified with AppTest: 45 files → 79 rows across david,
+  glass_door, indeed, kimble_group, linked_in, ziprecruiter; Production unchanged
+  (original 6-column Messages table, 638 rows); Site filter works; Overivew still
+  hides Messages/Email detail; empty SITE_EMAILS_DIR degrades to a friendly
+  info message.
 - Added sidebar Production/Development mode
   radio and split `main()` into a dispatcher plus frozen
   `render_production_dashboard()`. Development now has its own renderer: Label
@@ -239,6 +252,28 @@ next/prev within bounds.
 - Earlier session: emaail detail Prev/Next + Select email dropdown synced via
   `detail_idx` session key with `on_click` callbacks; fixed table-vs-detail
   index mismatch (single sort); deleted `generate_sample_emails.py`.
+
+## Tests / Failures diagnostics
+
+- `app/data_checks.py` holds the check functions (stdlib + the two parsers):
+  `check_data_directory`, `check_site_directory`, `check_email_dumps`,
+  `check_email_csvs`, `check_site_emails`, `check_messages_table`, plus
+  `run_all_checks` and a `main()` CLI (`python app/data_checks.py [--json]`).
+  Each `CheckResult` carries a pass flag, summary, and file-level failures with
+  the reason a file cannot be shown. `messages_table(jobs_df)` is the shared
+  builder for the exact six-column Development Messages table so the check and
+  the UI stay in sync.
+- Added a **Tests/Failures** button to the left sidebar in `main()`; clicking
+  toggles a report at the top of the page (both modes). `_render_test_report()`
+  shows a ✅/❌ expander per check, auto-expands failures, and lists reasons.
+  Checks re-read current files on each run, so reopening after Refresh data /
+  Refresh jobs verifies the new batch.
+- Fixed parser normalization found by the checks: `parse_indeed_job_email` and
+  `_parse_job_block` now use `_make_job`, so blank title/company/URL become
+  `Unknown` instead of empty cells.
+- Current check result: 5/6 pass. The genuinely unparseable
+  `Emails 20260904-20260917.txt` dump is reported with its reason
+  ("no valid Request/Response JSON found"). All 45 site files → 79 jobs pass.
 
 ## Open questions / possible next steps
 

@@ -99,6 +99,35 @@ Import the generic dispatcher with `from parse_job_emails import parse_job_email
 `parse_indeed_job_emails`, `parse_ziprecruiter_email`,
 `parse_david_careers_email`, and `parse_glassdoor_email` are also available.
 
+In the Streamlit app, switch the sidebar **Mode** to **Development**. The
+**Messages** table there is populated only from the `.txt` files in
+`data/site_emails/` and its sub-folders — never from the root email dumps or
+CSVs. Every file contributes one or more rows (subject-only alerts fall back
+to a best-effort row). Columns are **Date of Email, Company, Job Title,
+Salary, URL, Subject of Email**. Filter by Site or search across
+title/company/subject; use **Refresh jobs** after adding files. The email
+dumps are used only for Email detail / Overview. Production mode is unchanged
+and keeps the original Messages table. Point `SITE_EMAILS_DIR` at a different
+folder if your alert emails live elsewhere.
+
+## Tests / Failures
+
+The left sidebar has a **Tests/Failures** button. It runs a suite of data
+checks against the current files and shows a pass/fail line for each one, plus
+the reason any individual file could not be displayed. Checks cover: the data
+directory, the site email directory (including sub-folders), email `.txt` dump
+parsing, email CSV parsing, site email parsing / required job fields, and the
+six-column Messages table. Reopen the panel after **Refresh data** / **Refresh
+jobs** to verify a new batch of files.
+
+The same checks can be run outside Streamlit:
+
+```bash
+python app/data_checks.py
+python app/data_checks.py --json
+python app/data_checks.py --data-dir data --site-dir data/site_emails
+```
+
 ## Run it
 
 ```bash
