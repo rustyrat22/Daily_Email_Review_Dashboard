@@ -118,6 +118,22 @@ Linked in, zip-recruiter, Glass Door, David Careers.
 ## The dashboard (app/app.py)
 
 - `load_data` is `@st.cache_data(ttl=60)`; wraps `load_emails`.
+- Sidebar **Mode** radio (`app_mode` session key): `Production` / `Development`,
+  horizontal buttons at the top of the sidebar, above Filters. `main()` is only
+  a dispatcher: `Production` calls `render_production_dashboard()`, which is the
+  original dashboard and must stay unchanged for this build. The `Development`
+  branch calls `render_development_dashboard()`. Development filter order is
+  Label first (multiselect supports multiple; OR match), then date range,
+  Search, Important only, Unread only; the Sender multiselect is gone. Put new
+  changes in the Development renderer, never in the Production one.
+  `_render_filtered_results()` holds the results views shared by Development;
+  Production still has its own inline copy, unchanged. Development also has an
+  **Overivew** button (exact spelling) beside Refresh data; it toggles
+  `st.session_state["show_overview"]` (default False) and `_render_filtered_results`
+  renders either the Messages table + Email detail (flag False) OR the Overview
+  metrics + three charts (flag True) — never both. The Issues expander is always
+  shown. When Overview is active the dataframe, email selectbox, Prev/Next and
+  download button are not rendered at all.
 - Sidebar filters: date range (From/To), `Search` text box, `Sender`
   multiselect, `Label` multiselect (matches on word boundaries), `Important
   only` checkbox, `Unread only` checkbox.
@@ -168,9 +184,56 @@ Known-good assertion set (post-CSV support): 0 exceptions; 109 rows;
 label filter "LinkedIn" → 43 rows, "ZipRecruiter" → 14; detail nav selects
 next/prev within bounds.
 
+## Job email parser (Development only, not wired into the UI yet)
+
+- `app/parse_job_emails.py` is stdlib-only and parses raw RFC 822 emails from
+  `data/site_emails/` (those files are Git-ignored).
+- Every parser returns dicts with the keys `date_of_email`, `job_title`,
+  `company`, `salary`, `url`, `subject_from_email`. Missing values are returned
+  as `Unknown`, including salary and URL when the source has none.
+- Date/Subject come from decoded headers (plain body decoded via
+  `part.get_content()`). Site is detected from `From`/`Category` headers by
+  `parse_job_emails(text)`, which dispatches to the site-specific parsers and
+  falls back to the Indeed parsers.
+- Indeed: `parse_indeed_job_email(text)` (single), `parse_indeed_job_alert_email(text)`
+  (many), or `parse_indeed_job_emails(text)` (auto-detect; always a list). Job
+  alerts split on blank lines and filter on `https://www.indeed.com/rc/clk/dl`;
+  title = first line (minus `Compensation: ...`), company = second line before
+  ` - `, salary = first `$...` line after company (title compensation fallback),
+  URL = full `rc/clk/dl?jk=` link.
+- ZipRecruiter: `parse_ziprecruiter_email(text)` splits daily alerts on blank
+  lines, normalizes literal `\u2022` to `•`, and reads title / company before
+  the first `•` / first `$...` salary line. Verified: 15 jobs (including one
+  `Unknown` salary); no URLs are present in the source files.
+- David Careers: `parse_david_careers_email(text)` reads the one named job from
+  the subject/body (`<title> opportunity at <company>`). Verified:
+  `Senior Associate, Systems Engineer 1 | L 3 Harris Technologies | Unknown |
+  Unknown` (no salary/URL in source).
+- Glassdoor: `parse_glassdoor_email(text)` reads `<title> at <company> and N
+  more job` when present, otherwise the company from `... is hiring`. Verified:
+  `Business Analyst | Delta Star | Unknown | Unknown` and
+  `Unknown | Hitachi Energy | Unknown | Unknown` (no salary/URL in source).
+- CLI: `python app/parse_job_emails.py <file> [--json]` prints a numbered list
+  or JSON list for every supported site. Verified against single-job Indeed,
+  multi-job Indeed (21 jobs), and all four ZipRecruiter/David/Glassdoor files.
+
 ## Recent work / changelog
 
-- (current) Added CSV ingestion: `parse_email_csv`, `load_emails` now globs
+- (current, branch `separate_sites`) Added/expanded `app/parse_job_emails.py`
+  for extracting job details from Indeed, ZipRecruiter, David Careers, and
+  Glassdoor emails; not yet connected to the UI.
+- Added sidebar Production/Development mode
+  radio and split `main()` into a dispatcher plus frozen
+  `render_production_dashboard()`. Development now has its own renderer: Label
+  multiselect first (multiple allowed, OR match), no Sender filter. Verified
+  in-container AppTest: 0 exceptions; Production shows `Sender`, `Label` and
+  638 rows; Development shows only `Label` and 638 rows unfiltered; selecting
+  `LinkedIn` + `ZipRecruiter` gives 337 rows vs 277 for `LinkedIn` alone.
+  Also verified the Overivew button: hidden Overview initially, clicking shows
+  Overview / Volume over time / Top senders / Top labels, clicking again hides
+  them, and Messages / Email detail disappear while Overview is active;
+  Production has no such button and still shows all sections together.
+- Added CSV ingestion: `parse_email_csv`, `load_emails` now globs
   `*.csv` too, `Category` → labels, Date+Time combined, label/non-email CSVs
   excluded. README + this file updated. Rebuilt and verified 0 exceptions.
 - Earlier session: emaail detail Prev/Next + Select email dropdown synced via

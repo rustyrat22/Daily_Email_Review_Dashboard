@@ -128,7 +128,8 @@ def _gmail_labels(labels):
     return ", ".join(kept) or "—"
 
 
-def main():
+def render_production_dashboard():
+    """The existing dashboard, kept unchanged as the Production view."""
     st.title("\U0001F4E7 Daily Email Review")
     st.caption(f"Data directory: `{DATA_DIR}`")
 
@@ -317,6 +318,227 @@ def main():
         with st.expander(f"Issues ({len(errors)})"):
             for e in errors:
                 st.caption(e)
+
+
+def _render_filtered_results(fdf, errors, show_overview=False):
+    """Render the shared results views for a filtered dataframe."""
+    if not show_overview:
+        st.subheader("Messages")
+        if not len(fdf):
+            st.info("No messages match the current filters.")
+            return
+
+        table = fdf[["date", "sender", "subject", "snippet", "unread"]].copy()
+        table.insert(1, "label", fdf["labels"].map(_gmail_labels))
+        table["snippet"] = table["snippet"].str.slice(0, 120)
+        event = st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+        )
+
+        selected_rows = _selected_rows(event)
+
+        # Which email is shown in "Email detail" lives in session state so the
+        # table click, the dropdown, and Prev/Next all stay in sync. Prev/Next
+        # use on_click callbacks (run before the script body), so updating the
+        # selectbox's own key here is always legal.
+        if "detail_idx" not in st.session_state:
+            st.session_state["detail_idx"] = 0
+        if selected_rows:
+            st.session_state["detail_idx"] = selected_rows[0]
+        if not (0 <= st.session_state["detail_idx"] < len(fdf)):
+            st.session_state["detail_idx"] = 0
+
+        st.subheader("Email detail")
+        nav_prev, nav_pick, nav_next = st.columns([1, 4, 1])
+        with nav_prev:
+            st.button(
+                "◀ Prev",
+                key="prev_email",
+                use_container_width=True,
+                on_click=_nav_email,
+                args=(-1,),
+                disabled=st.session_state["detail_idx"] <= 0,
+            )
+        with nav_pick:
+            st.selectbox(
+                "Select email",
+                range(len(fdf)),
+                format_func=lambda i: _email_label(fdf.iloc[i]),
+                index=st.session_state["detail_idx"],
+                key="detail_idx",
+            )
+        with nav_next:
+            st.button(
+                "Next ▶",
+                key="next_email",
+                use_container_width=True,
+                on_click=_nav_email,
+                args=(1,),
+                disabled=st.session_state["detail_idx"] >= len(fdf) - 1,
+            )
+
+        # table and fdf share the same order (date desc), so the current index is
+        # the email the user selected — in the table, the dropdown, or via nav.
+        row = fdf.iloc[st.session_state["detail_idx"]]
+        meta = st.columns(4)
+        meta[0].markdown(f"**From**\n\n{row['sender']}")
+        meta[1].markdown(f"**Date**\n\n{row['date']}")
+        meta[2].markdown(f"**Labels**\n\n{row['labels'] or '—'}")
+        meta[3].markdown(f"**File**\n\n`{row['file']}`")
+
+        st.markdown(f"**{row['subject']}**\n\n{row['snippet']}")
+        st.markdown("**Body**")
+        st.markdown(
+            "<style>.email-body{max-height:440px;overflow-y:auto;line-height:1.6;"
+            "font-size:0.95rem;}</style>"
+            + f"<div class='email-body'>{_markup_body(row['body'])}</div>",
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download body as .txt",
+            data=row["body"],
+            file_name=f"{row['file']}.body.txt",
+            mime="text/plain",
+        )
+
+    else:
+        st.divider()
+        st.subheader("Overview")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Emails", len(fdf))
+        c2.metric("Unread", int(fdf["unread"].sum()))
+        c3.metric("Unique senders", fdf["sender"].nunique())
+        avg = fdf["size_estimate"].dropna()
+        c4.metric("Avg size", f"{avg.mean() / 1024:.0f} KB" if len(avg) else "—")
+
+        st.subheader("Volume over time")
+        daily = fdf.groupby(fdf["date"].dt.normalize()).size()
+        st.bar_chart(daily)
+
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Top senders")
+            st.bar_chart(fdf["sender"].value_counts().head(15))
+        with right:
+            st.subheader("Top labels")
+            top_labels = _labels_top(fdf)
+            if len(top_labels):
+                st.bar_chart(top_labels)
+            else:
+                st.caption("No label data.")
+
+    if errors:
+        st.divider()
+        with st.expander(f"Issues ({len(errors)})"):
+            for e in errors:
+                st.caption(e)
+
+
+def render_development_dashboard():
+    """Development view: labels first, multi-select, and no Sender filter."""
+    st.title("\U0001F4E7 Daily Email Review")
+    st.caption(f"Data directory: `{DATA_DIR}` · Development mode")
+
+    if "show_overview" not in st.session_state:
+        st.session_state["show_overview"] = False
+
+    col_refresh, col_overview, _ = st.columns([1, 1, 5])
+    with col_refresh:
+        if st.button("\U0001F504 Refresh data"):
+            load_data.clear()
+            st.rerun()
+    with col_overview:
+        if st.button("Overivew", help="Show or hide the Overview charts."):
+            st.session_state["show_overview"] = not st.session_state["show_overview"]
+
+    df, errors = load_data(DATA_DIR, LABEL_CSV)
+    if df is None or df.empty:
+        st.error("\n".join(errors[:20]))
+        st.info(
+            "Drop one *.txt dump file per email (like "
+            "`data/1a0a5a18017c3e70.txt`) into the data folder and hit Refresh."
+        )
+        st.stop()
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
+    valid_dates = df["date"].dropna()
+
+    label_names = sorted(
+        {
+            lab.strip()
+            for s in df["labels"].fillna("")
+            for lab in s.split(",")
+            if lab.strip()
+            and lab.strip() not in ("IMPORTANT", "UNREAD")
+            and not lab.strip().startswith("Label_")
+        }
+    )
+
+    # --- Sidebar filters (Development order: Label first, no Sender) ---
+    st.sidebar.header("Filters")
+    sel_labels = st.sidebar.multiselect(
+        "Label",
+        label_names,
+        help="Select one or more labels. Emails matching any selected label are shown.",
+    )
+    if valid_dates.empty:
+        start = end = None
+        st.sidebar.warning("No valid dates in the data.")
+    else:
+        min_date, max_date = valid_dates.min().date(), valid_dates.max().date()
+        start = st.sidebar.date_input("From", min_date, min_value=min_date, max_value=max_date)
+        end = st.sidebar.date_input("To", max_date, min_value=min_date, max_value=max_date)
+
+    search = st.sidebar.text_input("Search", placeholder="subject / sender / body")
+    important_only = st.sidebar.checkbox(
+        "Important only", value=False, help="Show emails labeled IMPORTANT."
+    )
+    unread_only = st.sidebar.checkbox("Unread only", value=False)
+
+    mask = pd.Series(True, index=df.index)
+    if start and end:
+        mask &= df["date"].dt.date.between(start, end)
+    if sel_labels:
+        pattern = "|".join(r"\b" + re.escape(lab) + r"\b" for lab in sel_labels)
+        mask &= df["labels"].fillna("").str.contains(pattern, regex=True, na=False)
+    if important_only:
+        mask &= df["important"]
+    if unread_only:
+        mask &= df["unread"]
+    if search:
+        q = search.lower()
+        mask &= (
+            df["subject"].str.lower().str.contains(q, na=False)
+            | df["sender"].str.lower().str.contains(q, na=False)
+            | df["snippet"].str.lower().str.contains(q, na=False)
+            | df["body"].str.lower().str.contains(q, na=False)
+        )
+
+    fdf = df[mask].sort_values("date", ascending=False).reset_index(drop=True)
+    _render_filtered_results(
+        fdf, errors, show_overview=st.session_state["show_overview"]
+    )
+
+
+def main():
+    """Route to Production (frozen current behavior) or Development."""
+    mode = st.sidebar.radio(
+        "Mode",
+        ("Production", "Development"),
+        horizontal=True,
+        key="app_mode",
+        help="Production is the current dashboard. Development is for upcoming changes.",
+    )
+    st.sidebar.divider()
+
+    if mode == "Production":
+        render_production_dashboard()
+    else:
+        render_development_dashboard()
 
 
 if __name__ == "__main__":

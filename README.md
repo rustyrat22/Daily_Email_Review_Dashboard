@@ -73,6 +73,32 @@ against `data/label naming.csv` (columns `label_id, label_name`) and displays
 friendly names everywhere (filter, chart, detail view). Unknown labels keep
 their raw value. Point `LABEL_CSV` somewhere else if yours lives elsewhere.
 
+## Job email parser (Development)
+
+`app/parse_job_emails.py` extracts `date_of_email`, `job_title`, `company`,
+`salary`, `url`, and `subject_from_email` from raw site alert emails. It
+auto-detects the source from the `From`/`Category` headers and supports:
+
+- **Indeed** — single-job and multi-job alert emails (full job URLs available)
+- **ZipRecruiter** — multi-job daily alerts (titles, companies, salaries; no URLs in the source files)
+- **David Careers / Glassdoor** — the one job named in the subject/body (no salary or URL in the source files)
+
+Missing values are returned as `Unknown`. Only the standard library is used,
+so it runs locally without Docker:
+
+```bash
+python app/parse_job_emails.py data/site_emails/indeed/indeed_multiple_job_email.txt
+python app/parse_job_emails.py data/site_emails/ziprecruiter/2026-11-13_135852_ZipRecruiter_69.30.txt
+python app/parse_job_emails.py data/site_emails/david/2026-11-14_103454_DavidCareers_Senio.txt
+python app/parse_job_emails.py data/site_emails/glass_door/2026-11-14_004327_Glassdoor_Busin.txt
+python app/parse_job_emails.py <file> --json
+```
+
+Import the generic dispatcher with `from parse_job_emails import parse_job_emails`
+(returns a list, one dict per job). Site-specific functions
+`parse_indeed_job_emails`, `parse_ziprecruiter_email`,
+`parse_david_careers_email`, and `parse_glassdoor_email` are also available.
+
 ## Run it
 
 ```bash
@@ -100,6 +126,7 @@ Only files directly inside `data/` are used; subdirectories (such as
 
 ## What the app shows
 
+- Sidebar **Mode** switch (Production / Development). Production is the original dashboard. Development puts the multi-select **Label** filter first in the sidebar, allows selecting multiple labels, omits the **Sender** filter, and adds an **Overivew** button next to Refresh data that switches between the two views: messages/email detail (default) or the Overview metrics and charts. Only one view is shown at a time.
 - Overview metrics: email count, unread count, unique senders, average size
 - Volume over time, top senders, and label breakdowns (labels include the
   CSV `Category` column)

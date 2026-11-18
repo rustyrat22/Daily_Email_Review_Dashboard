@@ -4,6 +4,9 @@
 # Ignore everything in the data/temp data folder
 /data/temp data/
 
+# Ignore the site_emails folder and all of its child folders
+/data/site_emails/
+
 # Ignore all CSV files, except "label naming.csv"
 *.csv
 !label naming.csv
