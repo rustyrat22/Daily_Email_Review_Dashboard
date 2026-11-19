@@ -282,6 +282,13 @@ next/prev within bounds.
   job title / company / subject. `_render_jobs_table()` now only renders the
   filtered table; filtering happens in `render_development_dashboard()`.
   Production's Sender/Label/Search filters were left untouched.
+- Messages now omits any job whose Job Title, Company, and Salary are all
+  `Unknown`. The filter lives in `data_checks.messages_table()` (the shared
+  builder) so the UI and the "Messages table" CLI check stay in sync; 79 raw
+  jobs → 58 displayed rows. `check_all_unknown_jobs()` still reads the raw
+  jobs DataFrame, so all 21 hidden records remain visible in Tests/Failures
+  with their Site. `_render_jobs_table()` shows a friendly info message when
+  filtering leaves no rows.
 - Fixed parser normalization found by the checks: `parse_indeed_job_email` and
   `_parse_job_block` now use `_make_job`, so blank title/company/URL become
   `Unknown` instead of empty cells.
@@ -289,7 +296,8 @@ next/prev within bounds.
   `Emails 20260904-20260917.txt` dump is reported with its reason
   ("no valid Request/Response JSON found"), and 21 jobs have all three fields
   `Unknown` (sites: david, glass_door, indeed, kimble_group, linked_in).
-  All 45 site files → 79 jobs pass; Messages table is 6 columns.
+  All 45 site files → 79 jobs pass; Messages table shows 58 of those rows
+  (21 all-unknown jobs hidden) across exactly 6 columns.
 
 ## Open questions / possible next steps
 

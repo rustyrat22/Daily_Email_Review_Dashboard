@@ -61,10 +61,15 @@ def load_job_listings(site_emails_dir: str):
 
 def _render_jobs_table(jobs_df):
     """Render the job table used by Messages (filters live in the sidebar)."""
-    st.caption(f"{len(jobs_df)} job(s)")
-    st.dataframe(
-        data_checks.messages_table(jobs_df), use_container_width=True, hide_index=True
-    )
+    table = data_checks.messages_table(jobs_df)
+    st.caption(f"{len(table)} job(s)")
+    if table.empty:
+        st.info(
+            "No jobs to show — records with Job Title, Company, and Salary all "
+            "Unknown are hidden. See Tests/Failures for details."
+        )
+    else:
+        st.dataframe(table, use_container_width=True, hide_index=True)
 
 
 def _selected_rows(event):

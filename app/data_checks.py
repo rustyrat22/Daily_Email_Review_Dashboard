@@ -33,11 +33,26 @@ MESSAGE_FIELD_MAP = {
 MESSAGE_COLUMNS = tuple(MESSAGE_FIELD_MAP.values())
 
 
+def _is_unknown(series):
+    """True where a field is missing / blank / literally 'Unknown'."""
+    return series.fillna("").astype(str).str.strip().str.lower().eq("unknown")
+
+
 def messages_table(jobs_df):
-    """Build the exact DataFrame rendered as the Development Messages table."""
+    """Build the exact DataFrame rendered as the Development Messages table.
+
+    Jobs with Job Title, Company, and Salary all Unknown are omitted; they stay
+    visible in the Tests/Failures report (with their Site) via the raw jobs data.
+    """
     if jobs_df is None:
         return None
-    return jobs_df[list(MESSAGE_FIELD_MAP)].rename(columns=MESSAGE_FIELD_MAP)
+    table = jobs_df[list(MESSAGE_FIELD_MAP)].rename(columns=MESSAGE_FIELD_MAP)
+    show = ~(
+        _is_unknown(table["Job Title"])
+        & _is_unknown(table["Company"])
+        & _is_unknown(table["Salary"])
+    )
+    return table[show].reset_index(drop=True)
 
 
 def load_jobs(site_dir):
@@ -262,12 +277,11 @@ def check_all_unknown_jobs(jobs_df):
             [f"jobs DataFrame is missing {', '.join(missing)}"],
         )
 
-    def unknown(col):
-        return (
-            jobs_df[col].fillna("").astype(str).str.strip().str.lower().eq("unknown")
-        )
-
-    matches = jobs_df[unknown("job_title") & unknown("company") & unknown("salary")]
+    matches = jobs_df[
+        _is_unknown(jobs_df["job_title"])
+        & _is_unknown(jobs_df["company"])
+        & _is_unknown(jobs_df["salary"])
+    ]
     failures = []
     for _, row in matches.iterrows():
         site = str(row.get("site") or "").strip() or "Unknown"

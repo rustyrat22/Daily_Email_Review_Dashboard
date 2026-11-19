@@ -113,7 +113,9 @@ In the Streamlit app, switch the sidebar **Mode** to **Development**. The
 `data/site_emails/` and its sub-folders — never from the root email dumps or
 CSVs. Every file contributes one or more rows (subject-only alerts fall back
 to a best-effort row). Columns are **Date of Email, Company, Job Title,
-Salary, URL, Subject of Email**. The Development sidebar filters are **Site**
+Salary, URL, Subject of Email**. Records where **Company, Job Title, and
+Salary are all `Unknown` are hidden** from Messages; they are still listed in
+Tests/Failures with their Site. The Development sidebar filters are **Site**
 (multi-select of the site folders) and **Search Jobs** (matches job title,
 company, or subject email). Use **Refresh jobs** after adding files. The email
 dumps are used only for Email detail / Overview. Production mode is unchanged
@@ -128,8 +130,8 @@ the reason any individual file could not be displayed. Checks cover: the data
 directory, the site email directory (including sub-folders), email `.txt` dump
 parsing, email CSV parsing, site email parsing / required job fields, the
 six-column Messages table, and an **All-unknown job fields** check that lists
-every job where Job Title, Company, and Salary are all `Unknown` together with
-the **Site** it came from and the email subject. While the panel is selected,
+every job hidden from Messages because Job Title, Company, and Salary are all
+`Unknown`, together with the **Site** it came from and the email subject. While the panel is selected,
 the rest of the dashboard is hidden; click the button again to return to it.
 Reopen the panel after **Refresh data** / **Refresh jobs** to verify a new
 batch of files.
