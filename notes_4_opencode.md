@@ -255,25 +255,41 @@ next/prev within bounds.
 
 ## Tests / Failures diagnostics
 
-- `app/data_checks.py` holds the check functions (stdlib + the two parsers):
-  `check_data_directory`, `check_site_directory`, `check_email_dumps`,
-  `check_email_csvs`, `check_site_emails`, `check_messages_table`, plus
-  `run_all_checks` and a `main()` CLI (`python app/data_checks.py [--json]`).
-  Each `CheckResult` carries a pass flag, summary, and file-level failures with
-  the reason a file cannot be shown. `messages_table(jobs_df)` is the shared
-  builder for the exact six-column Development Messages table so the check and
-  the UI stay in sync.
+- `app/data_checks.py` holds the check functions (stdlib + pandas + the two
+  parsers): `check_data_directory`, `check_site_directory`, `check_email_dumps`,
+  `check_email_csvs`, `check_site_emails`, `check_messages_table`, and
+  `check_all_unknown_jobs`, plus `run_all_checks` and a `main()` CLI
+  (`python app/data_checks.py [--json]`). Each `CheckResult` carries a pass
+  flag, summary, and file-level failures with the reason a file cannot be
+  shown. `messages_table(jobs_df)` is the shared builder for the exact
+  six-column Development Messages table so the check and the UI stay in sync.
+  `load_jobs(site_dir)` rebuilds the raw (Site-bearing) jobs DataFrame for the
+  CLI so it runs the same full suite as the UI.
 - Added a **Tests/Failures** button to the left sidebar in `main()`; clicking
-  toggles a report at the top of the page (both modes). `_render_test_report()`
-  shows a ✅/❌ expander per check, auto-expands failures, and lists reasons.
+  toggles a report (both modes). `_render_test_report()` shows a ✅/❌ expander
+  per check, auto-expands failures, and lists reasons. While selected, the
+  dashboard is **hidden** — `main()` returns right after the report, so no
+  title, filters, Messages table, or charts render. Click again to restore.
   Checks re-read current files on each run, so reopening after Refresh data /
   Refresh jobs verifies the new batch.
+- Added `check_all_unknown_jobs()`: lists every job whose `job_title`,
+  `company`, and `salary` are all `Unknown`, with the **Site** it came from and
+  the email subject. Failures are shown inside the report as `Site: <site> —
+  Subject: <subject>`.
+- Development sidebar filters changed: the `Label` multiselect (built from
+  email-dump labels) was replaced by `Site` (from `jobs_df["site"]`), and the
+  general `Search` text input was replaced by `Search Jobs`, filtering jobs on
+  job title / company / subject. `_render_jobs_table()` now only renders the
+  filtered table; filtering happens in `render_development_dashboard()`.
+  Production's Sender/Label/Search filters were left untouched.
 - Fixed parser normalization found by the checks: `parse_indeed_job_email` and
   `_parse_job_block` now use `_make_job`, so blank title/company/URL become
   `Unknown` instead of empty cells.
-- Current check result: 5/6 pass. The genuinely unparseable
+- Current check result: 5/7 pass. The genuinely unparseable
   `Emails 20260904-20260917.txt` dump is reported with its reason
-  ("no valid Request/Response JSON found"). All 45 site files → 79 jobs pass.
+  ("no valid Request/Response JSON found"), and 21 jobs have all three fields
+  `Unknown` (sites: david, glass_door, indeed, kimble_group, linked_in).
+  All 45 site files → 79 jobs pass; Messages table is 6 columns.
 
 ## Open questions / possible next steps
 

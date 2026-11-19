@@ -13,12 +13,21 @@ Daily_Email_Review_Dashboard/
 ├── app/
 │   ├── app.py                    # the Streamlit dashboard
 │   ├── parse_emails.py           # parser for dump files and email CSVs
+│   ├── parse_job_emails.py       # parser for site job alert emails
+│   ├── data_checks.py            # Tests/Failures check suite (also a CLI)
 │   └── requirements.txt
 ├── data/
 │   ├── 1a0a5a18017c3e70.txt      # example dump (one email per file)
 │   ├── label naming.csv          # label_id -> label_name mapping
 │   ├── *.txt                     # add as many dumps as you like
-│   └── *.csv                     # ...or email CSV exports
+│   ├── *.csv                     # ...or email CSV exports
+│   └── site_emails/              # Development Messages source (per-site sub-folders)
+│       ├── indeed/
+│       ├── ziprecruiter/
+│       ├── david/
+│       ├── glass_door/
+│       ├── linked_in/
+│       └── kimble_group/
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
@@ -104,11 +113,12 @@ In the Streamlit app, switch the sidebar **Mode** to **Development**. The
 `data/site_emails/` and its sub-folders — never from the root email dumps or
 CSVs. Every file contributes one or more rows (subject-only alerts fall back
 to a best-effort row). Columns are **Date of Email, Company, Job Title,
-Salary, URL, Subject of Email**. Filter by Site or search across
-title/company/subject; use **Refresh jobs** after adding files. The email
+Salary, URL, Subject of Email**. The Development sidebar filters are **Site**
+(multi-select of the site folders) and **Search Jobs** (matches job title,
+company, or subject email). Use **Refresh jobs** after adding files. The email
 dumps are used only for Email detail / Overview. Production mode is unchanged
-and keeps the original Messages table. Point `SITE_EMAILS_DIR` at a different
-folder if your alert emails live elsewhere.
+and keeps its original Label / Search filters and Messages table. Point
+`SITE_EMAILS_DIR` at a different folder if your alert emails live elsewhere.
 
 ## Tests / Failures
 
@@ -116,9 +126,13 @@ The left sidebar has a **Tests/Failures** button. It runs a suite of data
 checks against the current files and shows a pass/fail line for each one, plus
 the reason any individual file could not be displayed. Checks cover: the data
 directory, the site email directory (including sub-folders), email `.txt` dump
-parsing, email CSV parsing, site email parsing / required job fields, and the
-six-column Messages table. Reopen the panel after **Refresh data** / **Refresh
-jobs** to verify a new batch of files.
+parsing, email CSV parsing, site email parsing / required job fields, the
+six-column Messages table, and an **All-unknown job fields** check that lists
+every job where Job Title, Company, and Salary are all `Unknown` together with
+the **Site** it came from and the email subject. While the panel is selected,
+the rest of the dashboard is hidden; click the button again to return to it.
+Reopen the panel after **Refresh data** / **Refresh jobs** to verify a new
+batch of files.
 
 The same checks can be run outside Streamlit:
 
@@ -152,10 +166,20 @@ Only files directly inside `data/` are used; subdirectories (such as
    `DATA_DIR=/data` in `docker-compose.yml` (or
    `DATA_DIR=/path/to/folder` if running `streamlit run app/app.py` locally).
 3. Empty or buggy files show up under **Issues** with their filename.
+4. For Development's Messages table, drop raw job-alert emails into
+   `data/site_emails/<site>/*.txt` (sub-folders are scanned recursively). Use
+   **Refresh jobs** after adding files, and **Tests/Failures** to see any files
+   that could not be displayed and why.
 
 ## What the app shows
 
-- Sidebar **Mode** switch (Production / Development). Production is the original dashboard. Development puts the multi-select **Label** filter first in the sidebar, allows selecting multiple labels, omits the **Sender** filter, and adds an **Overivew** button next to Refresh data that switches between the two views: messages/email detail (default) or the Overview metrics and charts. Only one view is shown at a time.
+- Sidebar **Mode** switch (Production / Development), plus a **Tests/Failures**
+  button that shows the check report and hides everything else until clicked
+  again. Production is the original dashboard (Sender / Label / Search
+  filters). Development filters by **Site** and **Search Jobs**, and adds an
+  **Overivew** button next to Refresh data that switches between the two views:
+  messages/email detail (default) or the Overview metrics and charts. Only one
+  view is shown at a time. The spelling `Overivew` is intentional.
 - Overview metrics: email count, unread count, unique senders, average size
 - Volume over time, top senders, and label breakdowns (labels include the
   CSV `Category` column)
@@ -170,7 +194,10 @@ Only files directly inside `data/` are used; subdirectories (such as
 ## Notes
 
 - Parsing is cached for 60 s (`ttl=60`) so the dashboard doesn't re-scan the
-  folder on every widget interaction; the Refresh button clears the cache.
+  folder on every widget interaction; the Refresh data / Refresh jobs buttons
+  clear the respective caches.
+- `data/site_emails/` is gitignored — local alert-email fixtures go there and
+  are not committed. `data/label naming.csv` is the one CSV kept in git.
 - The parser extracts balanced JSON objects with a quote-aware scanner, so
   braces inside message text don't confuse it.
 - Scaling up: if you collect thousands of dumps, the `load_emails` scan is

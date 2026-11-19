@@ -60,33 +60,11 @@ def load_job_listings(site_emails_dir: str):
 
 
 def _render_jobs_table(jobs_df):
-    """Render the Site/search filters and the job table used by Messages."""
-    sites = sorted(jobs_df["site"].dropna().unique().tolist())
-    sel_sites = st.multiselect(
-        "Site",
-        sites,
-        default=sites,
-        key="job_sites",
-        help="Show jobs parsed from the selected site folders.",
+    """Render the job table used by Messages (filters live in the sidebar)."""
+    st.caption(f"{len(jobs_df)} job(s)")
+    st.dataframe(
+        data_checks.messages_table(jobs_df), use_container_width=True, hide_index=True
     )
-    search = st.text_input(
-        "Search jobs", placeholder="job title / company / subject", key="job_search"
-    )
-
-    mask = pd.Series(True, index=jobs_df.index)
-    if sel_sites:
-        mask &= jobs_df["site"].isin(sel_sites)
-    if search:
-        q = search.lower()
-        mask &= (
-            jobs_df["job_title"].str.lower().str.contains(q, na=False)
-            | jobs_df["company"].str.lower().str.contains(q, na=False)
-            | jobs_df["subject_from_email"].str.lower().str.contains(q, na=False)
-        )
-    filtered = jobs_df[mask].reset_index(drop=True)
-
-    st.caption(f"{len(filtered)} job(s)")
-    st.dataframe(data_checks.messages_table(filtered), use_container_width=True, hide_index=True)
 
 
 def _selected_rows(event):
@@ -552,23 +530,21 @@ def render_development_dashboard():
     df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
     valid_dates = df["date"].dropna()
 
-    label_names = sorted(
-        {
-            lab.strip()
-            for s in df["labels"].fillna("")
-            for lab in s.split(",")
-            if lab.strip()
-            and lab.strip() not in ("IMPORTANT", "UNREAD")
-            and not lab.strip().startswith("Label_")
-        }
-    )
-
-    # --- Sidebar filters (Development order: Label first, no Sender) ---
+    # --- Sidebar filters (Development: Site + Search Jobs) ---
     st.sidebar.header("Filters")
-    sel_labels = st.sidebar.multiselect(
-        "Label",
-        label_names,
-        help="Select one or more labels. Emails matching any selected label are shown.",
+    sites = (
+        sorted(jobs_df["site"].dropna().astype(str).unique().tolist())
+        if "site" in jobs_df.columns
+        else []
+    )
+    sel_sites = st.sidebar.multiselect(
+        "Site",
+        sites,
+        default=sites,
+        help="Show jobs parsed from the selected site folders.",
+    )
+    job_search = st.sidebar.text_input(
+        "Search Jobs", placeholder="job title / company / subject"
     )
     if valid_dates.empty:
         start = end = None
@@ -578,30 +554,32 @@ def render_development_dashboard():
         start = st.sidebar.date_input("From", min_date, min_value=min_date, max_value=max_date)
         end = st.sidebar.date_input("To", max_date, min_value=min_date, max_value=max_date)
 
-    search = st.sidebar.text_input("Search", placeholder="subject / sender / body")
     important_only = st.sidebar.checkbox(
         "Important only", value=False, help="Show emails labeled IMPORTANT."
     )
     unread_only = st.sidebar.checkbox("Unread only", value=False)
 
+    # Site / Search Jobs filter the Messages table (from site_emails only).
+    job_mask = pd.Series(True, index=jobs_df.index)
+    if not jobs_df.empty:
+        if sel_sites:
+            job_mask &= jobs_df["site"].isin(sel_sites)
+        if job_search:
+            q = job_search.lower()
+            job_mask &= (
+                jobs_df["job_title"].fillna("").astype(str).str.lower().str.contains(q, na=False)
+                | jobs_df["company"].fillna("").astype(str).str.lower().str.contains(q, na=False)
+                | jobs_df["subject_from_email"].fillna("").astype(str).str.lower().str.contains(q, na=False)
+            )
+    jobs_df = jobs_df[job_mask].reset_index(drop=True)
+
     mask = pd.Series(True, index=df.index)
     if start and end:
         mask &= df["date"].dt.date.between(start, end)
-    if sel_labels:
-        pattern = "|".join(r"\b" + re.escape(lab) + r"\b" for lab in sel_labels)
-        mask &= df["labels"].fillna("").str.contains(pattern, regex=True, na=False)
     if important_only:
         mask &= df["important"]
     if unread_only:
         mask &= df["unread"]
-    if search:
-        q = search.lower()
-        mask &= (
-            df["subject"].str.lower().str.contains(q, na=False)
-            | df["sender"].str.lower().str.contains(q, na=False)
-            | df["snippet"].str.lower().str.contains(q, na=False)
-            | df["body"].str.lower().str.contains(q, na=False)
-        )
 
     fdf = df[mask].sort_values("date", ascending=False).reset_index(drop=True)
     _render_filtered_results(
@@ -669,10 +647,11 @@ def main():
                 DATA_DIR,
                 LABEL_CSV,
                 SITE_EMAILS_DIR,
-                jobs_df=data_checks.messages_table(jobs_df),
+                jobs_df=jobs_df,
             )
         _render_test_report(results)
-        st.divider()
+        # Tests/Failures is an exclusive view: hide the dashboard behind it.
+        return
 
     if mode == "Production":
         render_production_dashboard()

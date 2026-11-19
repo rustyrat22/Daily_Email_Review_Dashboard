@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pandas as pd
+
 from parse_emails import load_label_names, parse_email_csv, parse_email_file
 from parse_job_emails import parse_job_emails, _FIELDS
 
@@ -36,6 +38,24 @@ def messages_table(jobs_df):
     if jobs_df is None:
         return None
     return jobs_df[list(MESSAGE_FIELD_MAP)].rename(columns=MESSAGE_FIELD_MAP)
+
+
+def load_jobs(site_dir):
+    """Build the raw jobs DataFrame (with Site) used by the app/CLI."""
+    rows = []
+    root = Path(site_dir)
+    if root.is_dir():
+        for path in sorted(root.rglob("*.txt")):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                for job in parse_job_emails(text):
+                    row = dict(job)
+                    row["site"] = path.parent.name
+                    row["source_file"] = path.name
+                    rows.append(row)
+            except Exception:
+                pass  # check_site_emails() reports the reason for bad files
+    return pd.DataFrame(rows, columns=list(_FIELDS) + ["site", "source_file"])
 
 
 @dataclass
@@ -229,6 +249,37 @@ def check_messages_table(jobs_df):
     )
 
 
+def check_all_unknown_jobs(jobs_df):
+    """Report jobs whose Job Title, Company, and Salary are all Unknown, with Site."""
+    if jobs_df is None or jobs_df.empty:
+        return CheckResult("All-unknown job fields", True, "No jobs to check")
+    needed = ("job_title", "company", "salary", "site")
+    missing = [col for col in needed if col not in jobs_df.columns]
+    if missing:
+        return CheckResult(
+            "All-unknown job fields", False,
+            f"Missing column(s): {', '.join(missing)}",
+            [f"jobs DataFrame is missing {', '.join(missing)}"],
+        )
+
+    def unknown(col):
+        return (
+            jobs_df[col].fillna("").astype(str).str.strip().str.lower().eq("unknown")
+        )
+
+    matches = jobs_df[unknown("job_title") & unknown("company") & unknown("salary")]
+    failures = []
+    for _, row in matches.iterrows():
+        site = str(row.get("site") or "").strip() or "Unknown"
+        subject = str(row.get("subject_from_email") or "").strip() or "Unknown"
+        failures.append(f"Site: {site} — Subject: {subject}")
+    return CheckResult(
+        "All-unknown job fields", not failures,
+        f"{len(matches)} job(s) with Job Title, Company, and Salary all Unknown",
+        failures,
+    )
+
+
 def run_all_checks(data_dir, label_csv=None, site_dir=None, jobs_df=None):
     """Run every check and return an ordered list of CheckResult objects."""
     results = [
@@ -238,8 +289,11 @@ def run_all_checks(data_dir, label_csv=None, site_dir=None, jobs_df=None):
         check_email_csvs(data_dir, label_csv),
         check_site_emails(site_dir),
     ]
+    if jobs_df is None or jobs_df.empty:
+        jobs_df = load_jobs(site_dir) if site_dir else jobs_df
     if jobs_df is not None:
-        results.append(check_messages_table(jobs_df))
+        results.append(check_messages_table(messages_table(jobs_df)))
+        results.append(check_all_unknown_jobs(jobs_df))
     return results
 
 
