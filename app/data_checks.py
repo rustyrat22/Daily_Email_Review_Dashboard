@@ -55,21 +55,23 @@ def messages_table(jobs_df):
     return table[show].reset_index(drop=True)
 
 
-def load_jobs(site_dir):
+def load_jobs(site_dir, extra_dir=None):
     """Build the raw jobs DataFrame (with Site) used by the app/CLI."""
     rows = []
-    root = Path(site_dir)
-    if root.is_dir():
+    roots = [Path(site_dir)] if site_dir and Path(site_dir).is_dir() else []
+    if extra_dir and Path(extra_dir).is_dir():
+        roots.append(Path(extra_dir))
+    for root in roots:
         for path in sorted(root.rglob("*.txt")):
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
                 for job in parse_job_emails(text):
                     row = dict(job)
-                    row["site"] = path.parent.name
+                    row["site"] = job.get("site") or path.parent.name
                     row["source_file"] = path.name
                     rows.append(row)
             except Exception:
-                pass  # check_site_emails() reports the reason for bad files
+                pass  # the checks below report the reason for bad files
     return pd.DataFrame(rows, columns=list(_FIELDS) + ["site", "source_file"])
 
 
@@ -141,6 +143,30 @@ def check_site_directory(site_dir):
     return CheckResult(
         "Site email directory", True,
         f"{len(files)} files in {len(folders)} folders",
+    )
+
+
+def check_extra_email_source(extra_dir):
+    """The optional structured-export folder parses into jobs when present."""
+    if not extra_dir or not Path(extra_dir).is_dir():
+        return CheckResult("Structured email export", True, "Not configured")
+    root = Path(extra_dir)
+    files = sorted(p for p in root.rglob("*.txt") if p.is_file())
+    if not files:
+        return CheckResult("Structured email export", True, "No files")
+    failures, jobs = [], 0
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            parsed = parse_job_emails(text)
+            if not parsed:
+                failures.append(f"{_label(path, root)}: no jobs extracted — file cannot be shown")
+            jobs += len(parsed)
+        except Exception as exc:
+            failures.append(f"{_label(path, root)}: {_reason(exc)} — file could not be parsed")
+    return CheckResult(
+        "Structured email export", not failures,
+        f"{jobs} jobs from {len(files)} file(s)", failures,
     )
 
 
@@ -294,17 +320,20 @@ def check_all_unknown_jobs(jobs_df):
     )
 
 
-def run_all_checks(data_dir, label_csv=None, site_dir=None, jobs_df=None):
+def run_all_checks(
+    data_dir, label_csv=None, site_dir=None, jobs_df=None, extra_dir=None
+):
     """Run every check and return an ordered list of CheckResult objects."""
     results = [
         check_data_directory(data_dir),
         check_site_directory(site_dir),
+        check_extra_email_source(extra_dir),
         check_email_dumps(data_dir, label_csv),
         check_email_csvs(data_dir, label_csv),
         check_site_emails(site_dir),
     ]
     if jobs_df is None or jobs_df.empty:
-        jobs_df = load_jobs(site_dir) if site_dir else jobs_df
+        jobs_df = load_jobs(site_dir, extra_dir) if site_dir else jobs_df
     if jobs_df is not None:
         results.append(check_messages_table(messages_table(jobs_df)))
         results.append(check_all_unknown_jobs(jobs_df))
@@ -318,10 +347,16 @@ def main(argv=None):
         "--site-dir", default="data/site_emails", help="Site alert email folder"
     )
     parser.add_argument("--label-csv", default="data/label naming.csv")
+    parser.add_argument(
+        "--extra-dir", default="data/new_email_source",
+        help="Optional structured-export folder",
+    )
     parser.add_argument("--json", action="store_true", help="Print JSON results")
     args = parser.parse_args(argv)
 
-    results = run_all_checks(args.data_dir, args.label_csv, args.site_dir)
+    results = run_all_checks(
+        args.data_dir, args.label_csv, args.site_dir, extra_dir=args.extra_dir
+    )
     if args.json:
         print(json.dumps([r.as_dict() for r in results], indent=2))
     else:

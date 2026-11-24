@@ -128,7 +128,7 @@ Linked in, zip-recruiter, Glass Door, David Careers.
   changes in the Development renderer, never in the Production one.
   `_render_filtered_results()` holds the results views shared by Development;
   Production still has its own inline copy, unchanged. Development also has an
-  **Overivew** button (exact spelling) beside Refresh data; it toggles
+  **Overview** button beside Refresh data; it toggles
   `st.session_state["show_overview"]` (default False) and `_render_filtered_results`
   renders either the Messages table + Email detail (flag False) OR the Overview
   metrics + three charts (flag True) — never both. The Issues expander is always
@@ -232,7 +232,7 @@ next/prev within bounds.
   ZipRecruiter "TEKsystems has a ... opening" / "may want to hire you" emails)
   still produce a row. Verified with AppTest: 45 files → 79 rows across david,
   glass_door, indeed, kimble_group, linked_in, ziprecruiter; Production unchanged
-  (original 6-column Messages table, 638 rows); Site filter works; Overivew still
+  (original 6-column Messages table, 638 rows); Site filter works; Overview still
   hides Messages/Email detail; empty SITE_EMAILS_DIR degrades to a friendly
   info message.
 - Added sidebar Production/Development mode
@@ -242,7 +242,7 @@ next/prev within bounds.
   in-container AppTest: 0 exceptions; Production shows `Sender`, `Label` and
   638 rows; Development shows only `Label` and 638 rows unfiltered; selecting
   `LinkedIn` + `ZipRecruiter` gives 337 rows vs 277 for `LinkedIn` alone.
-  Also verified the Overivew button: hidden Overview initially, clicking shows
+  Also verified the Overview button: hidden Overview initially, clicking shows
   Overview / Volume over time / Top senders / Top labels, clicking again hides
   them, and Messages / Email detail disappear while Overview is active;
   Production has no such button and still shows all sections together.
@@ -252,6 +252,36 @@ next/prev within bounds.
 - Earlier session: emaail detail Prev/Next + Select email dropdown synced via
   `detail_idx` session key with `on_click` callbacks; fixed table-vs-detail
   index mismatch (single sort); deleted `generate_sample_emails.py`.
+
+## Structured email export support (new_email_source)
+
+- Verified `data/new_email_source/2026_Job_Hunt_Nov13-19_Structured_Export.txt`
+  against the existing Development setup: the old RFC822 parser mangled the
+  whole file into **one** garbage row (blank date/subject, salary from a
+  random line), so the source was unusable.
+- Added `parse_structured_export()` in `app/parse_job_emails.py`, detected by
+  `### EMAIL n` markers. It splits the file into email blocks, reads the
+  `Email Details` headers (Date / Subject / Category), parses the `Key jobs
+  listed:` bullets and numbered items, and handles:
+  - `Title at Company`, `Title – Company • Location`, `Title @ Company`
+  - inline `($91K–$185K)` / `(up to $70/hour)` salary ranges
+  - `Salary:` / `Compensation:` / `Rate:` continuation lines (split at ` | `)
+  - `(+ N more …)` and `Notes:` lines are ignored
+  - the trailing `EMAIL 30+` summary block (no headers) is skipped
+  - each row's **site** comes from that block's `Category` (LinkedIn →
+    `linked_in`, Kimble Group → `kimble_group`, Glassdoor → `glass_door`, etc.)
+- `parse_job_emails()` dispatches to it automatically. The export yields
+  **44 jobs** with no blank dates/subjects and no all-unknown rows.
+- `load_job_listings()` now also scans `NEW_EMAIL_SOURCE_DIR`
+  (default `data/new_email_source`) in addition to `SITE_EMAILS_DIR`, and uses
+  a parser-supplied `site` over the folder name. `data_checks.load_jobs()`
+  mirrors this; `run_all_checks()` gained an `extra_dir` argument and a
+  `check_extra_email_source()` check; CLI gained `--extra-dir`.
+- `.gitignore` now ignores `data/new_email_source/` alongside `site_emails/`.
+- Verified with AppTest: Development Messages shows 107 rows with the export
+  included, correct columns, Allstate / TEKsystems / salary values present,
+  Production unchanged, no exceptions. Current CLI result: 6/8 checks pass
+  (the known unparseable dump + all-unknown jobs remain as expected failures).
 
 ## Tests / Failures diagnostics
 

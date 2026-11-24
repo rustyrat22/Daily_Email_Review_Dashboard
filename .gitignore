@@ -7,6 +7,9 @@
 # Ignore the site_emails folder and all of its child folders
 /data/site_emails/
 
+# Ignore local structured email export sources
+/data/new_email_source/
+
 # Ignore all CSV files, except "label naming.csv"
 *.csv
 !label naming.csv

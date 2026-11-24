@@ -22,6 +22,9 @@ from parse_emails import load_emails
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 LABEL_CSV = os.environ.get("LABEL_CSV", os.path.join(DATA_DIR, "label naming.csv"))
 SITE_EMAILS_DIR = os.environ.get("SITE_EMAILS_DIR", os.path.join(DATA_DIR, "site_emails"))
+NEW_EMAIL_SOURCE_DIR = os.environ.get(
+    "NEW_EMAIL_SOURCE_DIR", os.path.join(DATA_DIR, "new_email_source")
+)
 
 st.set_page_config(page_title="Daily Email Review", layout="wide")
 
@@ -35,24 +38,31 @@ def load_data(data_dir: str, label_csv: str):
 
 
 @st.cache_data(ttl=60, show_spinner="Parsing site job emails...")
-def load_job_listings(site_emails_dir: str):
-    """Parse every raw email under site_emails_dir/*/ into one job DataFrame."""
+def load_job_listings(site_emails_dir: str, extra_dir: str = None):
+    """Parse site email folders plus the structured export into one DataFrame."""
     rows, errors = [], []
-    root = Path(site_emails_dir)
-    if not root.exists():
-        return None, [f"Site email directory not found: {site_emails_dir}"]
+    roots = []
+    primary = Path(site_emails_dir)
+    if primary.exists():
+        roots.append(primary)
+    else:
+        errors.append(f"Site email directory not found: {site_emails_dir}")
+    if extra_dir and Path(extra_dir).is_dir():
+        roots.append(Path(extra_dir))
 
-    for path in sorted(root.rglob("*.txt")):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            jobs = job_parser.parse_job_emails(text)
-            for job in jobs:
-                row = dict(job)
-                row["site"] = path.parent.name
-                row["source_file"] = path.name
-                rows.append(row)
-        except Exception as exc:  # keep one bad file from breaking the whole view
-            errors.append(f"{path.name}: {exc}")
+    for root in roots:
+        for path in sorted(root.rglob("*.txt")):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                jobs = job_parser.parse_job_emails(text)
+                for job in jobs:
+                    row = dict(job)
+                    # Structured exports carry per-email Site from their Category.
+                    row["site"] = job.get("site") or path.parent.name
+                    row["source_file"] = path.name
+                    rows.append(row)
+            except Exception as exc:  # keep one bad file from breaking the whole view
+                errors.append(f"{path.name}: {exc}")
 
     if not rows:
         return None, errors
@@ -510,7 +520,7 @@ def render_development_dashboard():
             load_data.clear()
             st.rerun()
     with col_overview:
-        if st.button("Overivew", help="Show or hide the Overview charts."):
+        if st.button("Overview", help="Show or hide the Overview charts."):
             st.session_state["show_overview"] = not st.session_state["show_overview"]
     with col_jobs:
         if st.button("Refresh jobs", key="refresh_jobs"):
@@ -519,7 +529,7 @@ def render_development_dashboard():
 
     # Messages is populated only from site_emails/ (and its sub-folders).
     # The email-dump data is loaded separately, just for Email detail / Overview.
-    jobs_df, job_errors = load_job_listings(SITE_EMAILS_DIR)
+    jobs_df, job_errors = load_job_listings(SITE_EMAILS_DIR, NEW_EMAIL_SOURCE_DIR)
     if jobs_df is None:
         jobs_df = pd.DataFrame()  # keeps Development in "jobs" mode with a clear message
     df, email_errors = load_data(DATA_DIR, LABEL_CSV)
@@ -647,12 +657,13 @@ def main():
     if st.session_state["show_tests"]:
         st.subheader("Tests / Failures")
         with st.spinner("Running data checks..."):
-            jobs_df, _ = load_job_listings(SITE_EMAILS_DIR)
+            jobs_df, _ = load_job_listings(SITE_EMAILS_DIR, NEW_EMAIL_SOURCE_DIR)
             results = data_checks.run_all_checks(
                 DATA_DIR,
                 LABEL_CSV,
                 SITE_EMAILS_DIR,
                 jobs_df=jobs_df,
+                extra_dir=NEW_EMAIL_SOURCE_DIR,
             )
         _render_test_report(results)
         # Tests/Failures is an exclusive view: hide the dashboard behind it.

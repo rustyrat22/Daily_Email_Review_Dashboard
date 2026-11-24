@@ -1,8 +1,9 @@
 """Extract job details from site email alert files.
 
 Supports Indeed (single and multi-job), ZipRecruiter, David Careers, and
-Glassdoor emails like the files under data/site_emails/. The input is a raw
-RFC 822 email. Only Python's standard library is used.
+Glassdoor emails like the files under data/site_emails/. It also handles the
+multi-email "### EMAIL n / Key jobs listed" structured export format found in
+data/new_email_source/. Only Python's standard library is used.
 
 Run directly:
 
@@ -51,6 +52,22 @@ _SUBJECT_HAS_OPENING_RE = re.compile(
 _SUBJECT_MAY_HIRE_RE = re.compile(
     r"^[^,]+,\s*(?P<company>.+?)\s+may want to hire you", re.IGNORECASE
 )
+
+# Structured export: "### EMAIL n" blocks with a header list and a job list.
+_STRUCTURED_EMAIL_RE = re.compile(r"(?m)^###\s+EMAIL\b[^\n]*$")
+_STRUCTURED_HEADER_RE = re.compile(
+    r"(?m)^(?P<key>Message ID|Date|From|To|Subject|Category):\s*(?P<value>.*)$"
+)
+_STRUCTURED_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(?P<item>.+)$")
+_STRUCTURED_SALARY_LINE_RE = re.compile(
+    r"^\s*(?:salary|compensation|rate)\s*:\s*(?P<value>.+)$", re.IGNORECASE
+)
+_STRUCTURED_INLINE_SALARY_RE = re.compile(
+    r"\((?P<salary>(?:up\s+to\s+)?(?:US|CA)?\$[^)]*)\)", re.IGNORECASE
+)
+_STRUCTURED_GENERIC_TITLES = {
+    "position", "positions", "position(s)", "open position", "open positions", "roles",
+}
 
 _UNKNOWN = "Unknown"
 _UNKNOWN_SALARY = _UNKNOWN
@@ -237,8 +254,126 @@ def parse_glassdoor_email(email_text):
     return [_make_job(date, subject, title, company, "", "")]
 
 
+def _structured_site(value):
+    """Normalize a structured export's Category/From value to a site folder name."""
+    text = (value or "").lower()
+    for site, token in (
+        ("ziprecruiter", "ziprecruiter"),
+        ("david", "david"),
+        ("glass_door", "glassdoor"),
+        ("linked_in", "linkedin"),
+        ("kimble_group", "kimble"),
+        ("indeed", "indeed"),
+    ):
+        if token in text:
+            return site
+    return ""
+
+
+def _structured_blocks(email_text):
+    """Return the text of each '### EMAIL n' section (summary blocks included)."""
+    markers = list(_STRUCTURED_EMAIL_RE.finditer(email_text))
+    return [
+        email_text[m.end():markers[i + 1].start() if i + 1 < len(markers) else len(email_text)]
+        for i, m in enumerate(markers)
+    ]
+
+
+def _structured_headers(block):
+    return {
+        match.group("key").lower(): re.sub(r"\s+", " ", match.group("value")).strip()
+        for match in _STRUCTURED_HEADER_RE.finditer(block)
+    }
+
+
+def _structured_job_lines(block):
+    """Return the lines following 'Key jobs listed:' in one email block."""
+    lines = block.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip().lower() == "key jobs listed:"),
+        None,
+    )
+    return lines[start + 1:] if start is not None else []
+
+
+def _parse_structured_item(item):
+    """Split one exported job bullet into (title, company, salary)."""
+    salary = ""
+    inline = _STRUCTURED_INLINE_SALARY_RE.search(item)
+    if inline:
+        salary = inline.group("salary").strip()
+        item = _STRUCTURED_INLINE_SALARY_RE.sub("", item)
+    item = re.sub(r"\s*\((?:details in email body)\)\s*$", "", item, flags=re.I).strip()
+
+    # A bullet is "Title at Company" or "Title – Company • Location ...".
+    main = item.split("•", 1)[0].strip()
+    title, company = "", ""
+    if " – " in main:
+        title, company = main.split(" – ", 1)
+    elif " at " in main.lower():
+        pos = main.lower().find(" at ")
+        title, company = main[:pos], main[pos + 4:]
+    elif " @ " in main:
+        title, company = main.split(" @ ", 1)
+    else:
+        roles = re.match(r"^(?P<company>.+?)\s+roles?$", main, re.IGNORECASE)
+        if roles:
+            company = roles.group("company")
+        else:
+            title = main
+
+    company = re.sub(r"\s+[-|]\s+(?:Remote|Hybrid|Onsite).*$", "", company, flags=re.I)
+    title = title.strip(" .;")
+    if title.lower() in _STRUCTURED_GENERIC_TITLES:
+        title = ""
+    return title, company.strip(" .;"), salary.strip(" .;")
+
+
+def _structured_salary_from_line(line):
+    match = _STRUCTURED_SALARY_LINE_RE.match(line)
+    if not match:
+        return ""
+    return match.group("value").split("|", 1)[0].strip(" .;")
+
+
+def parse_structured_export(email_text):
+    """Parse a multi-email structured export, one row per listed key job."""
+    jobs = []
+    for block in _structured_blocks(email_text):
+        headers = _structured_headers(block)
+        # Skip preamble / "EMAIL 30+" summary blocks that have no real email details.
+        if not any(headers.get(key) for key in ("subject", "date", "from")):
+            continue
+        date = headers.get("date", "")
+        subject = headers.get("subject", "")
+        site = _structured_site(headers.get("category", "")) or _structured_site(
+            headers.get("from", "")
+        )
+        current = None
+        for raw in _structured_job_lines(block):
+            line = raw.strip()
+            if not line or line.startswith("(+"):
+                continue
+            item = _STRUCTURED_ITEM_RE.match(raw)
+            if item:
+                if current is not None:
+                    jobs.append(current)
+                title, company, salary = _parse_structured_item(item.group("item"))
+                current = _make_job(date, subject, title, company, salary, "")
+                current["site"] = site
+                continue
+            salary = _structured_salary_from_line(line)
+            if salary and current is not None:
+                current["salary"] = salary
+        if current is not None:
+            jobs.append(current)
+    return jobs
+
+
 def parse_job_emails(email_text):
     """Auto-detect the source site and return a list of job detail dicts."""
+    if _STRUCTURED_EMAIL_RE.search(email_text):
+        return parse_structured_export(email_text)
     msg, _, _ = _message(email_text)
     site = _source_site(msg)
     if site == "ziprecruiter":
