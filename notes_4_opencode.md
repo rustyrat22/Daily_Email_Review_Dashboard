@@ -118,6 +118,22 @@ Linked in, zip-recruiter, Glass Door, David Careers.
 ## The dashboard (app/app.py)
 
 - `load_data` is `@st.cache_data(ttl=60)`; wraps `load_emails`.
+- Sidebar **Mode** radio (`app_mode` session key): `Production` / `Development`,
+  horizontal buttons at the top of the sidebar, above Filters. `main()` is only
+  a dispatcher: `Production` calls `render_production_dashboard()`, which is the
+  original dashboard and must stay unchanged for this build. The `Development`
+  branch calls `render_development_dashboard()`. Development filter order is
+  Label first (multiselect supports multiple; OR match), then date range,
+  Search, Important only, Unread only; the Sender multiselect is gone. Put new
+  changes in the Development renderer, never in the Production one.
+  `_render_filtered_results()` holds the results views shared by Development;
+  Production still has its own inline copy, unchanged. Development also has an
+  **Overview** button beside Refresh data; it toggles
+  `st.session_state["show_overview"]` (default False) and `_render_filtered_results`
+  renders either the Messages table + Email detail (flag False) OR the Overview
+  metrics + three charts (flag True) — never both. The Issues expander is always
+  shown. When Overview is active the dataframe, email selectbox, Prev/Next and
+  download button are not rendered at all.
 - Sidebar filters: date range (From/To), `Search` text box, `Sender`
   multiselect, `Label` multiselect (matches on word boundaries), `Important
   only` checkbox, `Unread only` checkbox.
@@ -168,14 +184,150 @@ Known-good assertion set (post-CSV support): 0 exceptions; 109 rows;
 label filter "LinkedIn" → 43 rows, "ZipRecruiter" → 14; detail nav selects
 next/prev within bounds.
 
+## Job email parser (Development only, not wired into the UI yet)
+
+- `app/parse_job_emails.py` is stdlib-only and parses raw RFC 822 emails from
+  `data/site_emails/` (those files are Git-ignored).
+- Every parser returns dicts with the keys `date_of_email`, `job_title`,
+  `company`, `salary`, `url`, `subject_from_email`. Missing values are returned
+  as `Unknown`, including salary and URL when the source has none.
+- Date/Subject come from decoded headers (plain body decoded via
+  `part.get_content()`). Site is detected from `From`/`Category` headers by
+  `parse_job_emails(text)`, which dispatches to the site-specific parsers and
+  falls back to the Indeed parsers.
+- Indeed: `parse_indeed_job_email(text)` (single), `parse_indeed_job_alert_email(text)`
+  (many), or `parse_indeed_job_emails(text)` (auto-detect; always a list). Job
+  alerts split on blank lines and filter on `https://www.indeed.com/rc/clk/dl`;
+  title = first line (minus `Compensation: ...`), company = second line before
+  ` - `, salary = first `$...` line after company (title compensation fallback),
+  URL = full `rc/clk/dl?jk=` link.
+- ZipRecruiter: `parse_ziprecruiter_email(text)` splits daily alerts on blank
+  lines, normalizes literal `\u2022` to `•`, and reads title / company before
+  the first `•` / first `$...` salary line. Verified: 15 jobs (including one
+  `Unknown` salary); no URLs are present in the source files.
+- David Careers: `parse_david_careers_email(text)` reads the one named job from
+  the subject/body (`<title> opportunity at <company>`). Verified:
+  `Senior Associate, Systems Engineer 1 | L 3 Harris Technologies | Unknown |
+  Unknown` (no salary/URL in source).
+- Glassdoor: `parse_glassdoor_email(text)` reads `<title> at <company> and N
+  more job` when present, otherwise the company from `... is hiring`. Verified:
+  `Business Analyst | Delta Star | Unknown | Unknown` and
+  `Unknown | Hitachi Energy | Unknown | Unknown` (no salary/URL in source).
+- CLI: `python app/parse_job_emails.py <file> [--json]` prints a numbered list
+  or JSON list for every supported site. Verified against single-job Indeed,
+  multi-job Indeed (21 jobs), and all four ZipRecruiter/David/Glassdoor files.
+
 ## Recent work / changelog
 
-- (current) Added CSV ingestion: `parse_email_csv`, `load_emails` now globs
+- (current, branch `separate_sites`) Added/expanded `app/parse_job_emails.py`
+  for extracting job details from Indeed, ZipRecruiter, David Careers, and
+  Glassdoor emails. In the Development view the **Messages** table is populated
+  only from `data/site_emails/` and its sub-folders (recursive `*.txt` glob),
+  never from the root email dumps/CSVs. Columns are exactly Date of Email,
+  Company, Job Title, Salary, URL, Subject of Email; the separate "Job Listings"
+  section was removed. Cached `load_job_listings`, Site filter, search, and
+  Refresh jobs apply; Email detail/Overview still use the email dumps, and
+  Development no longer `st.stop()`s when those are absent. Added
+  `parse_subject_only_email(text)` fallback so subject-only alerts (e.g. the two
+  ZipRecruiter "TEKsystems has a ... opening" / "may want to hire you" emails)
+  still produce a row. Verified with AppTest: 45 files → 79 rows across david,
+  glass_door, indeed, kimble_group, linked_in, ziprecruiter; Production unchanged
+  (original 6-column Messages table, 638 rows); Site filter works; Overview still
+  hides Messages/Email detail; empty SITE_EMAILS_DIR degrades to a friendly
+  info message.
+- Added sidebar Production/Development mode
+  radio and split `main()` into a dispatcher plus frozen
+  `render_production_dashboard()`. Development now has its own renderer: Label
+  multiselect first (multiple allowed, OR match), no Sender filter. Verified
+  in-container AppTest: 0 exceptions; Production shows `Sender`, `Label` and
+  638 rows; Development shows only `Label` and 638 rows unfiltered; selecting
+  `LinkedIn` + `ZipRecruiter` gives 337 rows vs 277 for `LinkedIn` alone.
+  Also verified the Overview button: hidden Overview initially, clicking shows
+  Overview / Volume over time / Top senders / Top labels, clicking again hides
+  them, and Messages / Email detail disappear while Overview is active;
+  Production has no such button and still shows all sections together.
+- Added CSV ingestion: `parse_email_csv`, `load_emails` now globs
   `*.csv` too, `Category` → labels, Date+Time combined, label/non-email CSVs
   excluded. README + this file updated. Rebuilt and verified 0 exceptions.
 - Earlier session: emaail detail Prev/Next + Select email dropdown synced via
   `detail_idx` session key with `on_click` callbacks; fixed table-vs-detail
   index mismatch (single sort); deleted `generate_sample_emails.py`.
+
+## Structured email export support (new_email_source)
+
+- Verified `data/new_email_source/2026_Job_Hunt_Nov13-19_Structured_Export.txt`
+  against the existing Development setup: the old RFC822 parser mangled the
+  whole file into **one** garbage row (blank date/subject, salary from a
+  random line), so the source was unusable.
+- Added `parse_structured_export()` in `app/parse_job_emails.py`, detected by
+  `### EMAIL n` markers. It splits the file into email blocks, reads the
+  `Email Details` headers (Date / Subject / Category), parses the `Key jobs
+  listed:` bullets and numbered items, and handles:
+  - `Title at Company`, `Title – Company • Location`, `Title @ Company`
+  - inline `($91K–$185K)` / `(up to $70/hour)` salary ranges
+  - `Salary:` / `Compensation:` / `Rate:` continuation lines (split at ` | `)
+  - `(+ N more …)` and `Notes:` lines are ignored
+  - the trailing `EMAIL 30+` summary block (no headers) is skipped
+  - each row's **site** comes from that block's `Category` (LinkedIn →
+    `linked_in`, Kimble Group → `kimble_group`, Glassdoor → `glass_door`, etc.)
+- `parse_job_emails()` dispatches to it automatically. The export yields
+  **44 jobs** with no blank dates/subjects and no all-unknown rows.
+- `load_job_listings()` now also scans `NEW_EMAIL_SOURCE_DIR`
+  (default `data/new_email_source`) in addition to `SITE_EMAILS_DIR`, and uses
+  a parser-supplied `site` over the folder name. `data_checks.load_jobs()`
+  mirrors this; `run_all_checks()` gained an `extra_dir` argument and a
+  `check_extra_email_source()` check; CLI gained `--extra-dir`.
+- `.gitignore` now ignores `data/new_email_source/` alongside `site_emails/`.
+- Verified with AppTest: Development Messages shows 107 rows with the export
+  included, correct columns, Allstate / TEKsystems / salary values present,
+  Production unchanged, no exceptions. Current CLI result: 6/8 checks pass
+  (the known unparseable dump + all-unknown jobs remain as expected failures).
+
+## Tests / Failures diagnostics
+
+- `app/data_checks.py` holds the check functions (stdlib + pandas + the two
+  parsers): `check_data_directory`, `check_site_directory`, `check_email_dumps`,
+  `check_email_csvs`, `check_site_emails`, `check_messages_table`, and
+  `check_all_unknown_jobs`, plus `run_all_checks` and a `main()` CLI
+  (`python app/data_checks.py [--json]`). Each `CheckResult` carries a pass
+  flag, summary, and file-level failures with the reason a file cannot be
+  shown. `messages_table(jobs_df)` is the shared builder for the exact
+  six-column Development Messages table so the check and the UI stay in sync.
+  `load_jobs(site_dir)` rebuilds the raw (Site-bearing) jobs DataFrame for the
+  CLI so it runs the same full suite as the UI.
+- Added a **Tests/Failures** button to the left sidebar in `main()`; clicking
+  toggles a report (both modes). `_render_test_report()` shows a ✅/❌ expander
+  per check, auto-expands failures, and lists reasons. While selected, the
+  dashboard is **hidden** — `main()` returns right after the report, so no
+  title, filters, Messages table, or charts render. Click again to restore.
+  Checks re-read current files on each run, so reopening after Refresh data /
+  Refresh jobs verifies the new batch.
+- Added `check_all_unknown_jobs()`: lists every job whose `job_title`,
+  `company`, and `salary` are all `Unknown`, with the **Site** it came from and
+  the email subject. Failures are shown inside the report as `Site: <site> —
+  Subject: <subject>`.
+- Development sidebar filters changed: the `Label` multiselect (built from
+  email-dump labels) was replaced by `Site` (from `jobs_df["site"]`), and the
+  general `Search` text input was replaced by `Search Jobs`, filtering jobs on
+  job title / company / subject. `_render_jobs_table()` now only renders the
+  filtered table; filtering happens in `render_development_dashboard()`.
+  Production's Sender/Label/Search filters were left untouched.
+- Messages now omits any job whose Job Title, Company, and Salary are all
+  `Unknown`. The filter lives in `data_checks.messages_table()` (the shared
+  builder) so the UI and the "Messages table" CLI check stay in sync; 79 raw
+  jobs → 58 displayed rows. `check_all_unknown_jobs()` still reads the raw
+  jobs DataFrame, so all 21 hidden records remain visible in Tests/Failures
+  with their Site. `_render_jobs_table()` shows a friendly info message when
+  filtering leaves no rows.
+- Fixed parser normalization found by the checks: `parse_indeed_job_email` and
+  `_parse_job_block` now use `_make_job`, so blank title/company/URL become
+  `Unknown` instead of empty cells.
+- Current check result: 5/7 pass. The genuinely unparseable
+  `Emails 20260904-20260917.txt` dump is reported with its reason
+  ("no valid Request/Response JSON found"), and 21 jobs have all three fields
+  `Unknown` (sites: david, glass_door, indeed, kimble_group, linked_in).
+  All 45 site files → 79 jobs pass; Messages table shows 58 of those rows
+  (21 all-unknown jobs hidden) across exactly 6 columns.
 
 ## Open questions / possible next steps
 

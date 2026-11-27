@@ -13,12 +13,22 @@ Daily_Email_Review_Dashboard/
 ├── app/
 │   ├── app.py                    # the Streamlit dashboard
 │   ├── parse_emails.py           # parser for dump files and email CSVs
+│   ├── parse_job_emails.py       # parser for site job alert emails
+│   ├── data_checks.py            # Tests/Failures check suite (also a CLI)
 │   └── requirements.txt
 ├── data/
 │   ├── 1a0a5a18017c3e70.txt      # example dump (one email per file)
 │   ├── label naming.csv          # label_id -> label_name mapping
 │   ├── *.txt                     # add as many dumps as you like
-│   └── *.csv                     # ...or email CSV exports
+│   ├── *.csv                     # ...or email CSV exports
+│   ├── site_emails/              # Development Messages source (per-site sub-folders)
+│   │   ├── indeed/
+│   │   ├── ziprecruiter/
+│   │   ├── david/
+│   │   ├── glass_door/
+│   │   ├── linked_in/
+│   │   └── kimble_group/
+│   └── new_email_source/         # multi-email structured export (also scanned)
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
@@ -73,6 +83,78 @@ against `data/label naming.csv` (columns `label_id, label_name`) and displays
 friendly names everywhere (filter, chart, detail view). Unknown labels keep
 their raw value. Point `LABEL_CSV` somewhere else if yours lives elsewhere.
 
+## Job email parser (Development)
+
+`app/parse_job_emails.py` extracts `date_of_email`, `job_title`, `company`,
+`salary`, `url`, and `subject_from_email` from raw site alert emails. It
+auto-detects the source from the `From`/`Category` headers and supports:
+
+- **Indeed** — single-job and multi-job alert emails (full job URLs available)
+- **ZipRecruiter** — multi-job daily alerts (titles, companies, salaries; no URLs in the source files)
+- **David Careers / Glassdoor** — the one job named in the subject/body (no salary or URL in the source files)
+- **Structured export** — one `.txt` can contain many `### EMAIL n` blocks with
+  `Email Details` (including `Category`) and `Key jobs listed:` bullets. Each
+  listed job becomes a row, and its **Site** comes from that email's `Category`
+  (LinkedIn → `linked_in`, Kimble Group → `kimble_group`, etc.) rather than the
+  folder name. Bullet salaries, inline `($…)` ranges, and `Salary:` /
+  `Compensation:` / `Rate:` continuation lines are parsed. This is the format
+  used by `data/new_email_source/`.
+
+Missing values are returned as `Unknown`. Only the standard library is used,
+so it runs locally without Docker:
+
+```bash
+python app/parse_job_emails.py data/site_emails/indeed/indeed_multiple_job_email.txt
+python app/parse_job_emails.py data/site_emails/ziprecruiter/2026-11-13_135852_ZipRecruiter_69.30.txt
+python app/parse_job_emails.py data/site_emails/david/2026-11-14_103454_DavidCareers_Senio.txt
+python app/parse_job_emails.py data/site_emails/glass_door/2026-11-14_004327_Glassdoor_Busin.txt
+python app/parse_job_emails.py <file> --json
+```
+
+Import the generic dispatcher with `from parse_job_emails import parse_job_emails`
+(returns a list, one dict per job). Site-specific functions
+`parse_indeed_job_emails`, `parse_ziprecruiter_email`,
+`parse_david_careers_email`, and `parse_glassdoor_email` are also available.
+
+In the Streamlit app, switch the sidebar **Mode** to **Development**. The
+**Messages** table is populated from the `.txt` files in `data/site_emails/`
+and its sub-folders, plus the optional structured export folder
+`data/new_email_source/` — never from the root email dumps or CSVs. Every file
+contributes one or more rows (subject-only alerts fall back to a best-effort
+row). Point `SITE_EMAILS_DIR` / `NEW_EMAIL_SOURCE_DIR` elsewhere if your files
+live in different folders. Columns are **Date of Email, Company, Job Title,
+Salary, URL, Subject of Email**. Records where **Company, Job Title, and
+Salary are all `Unknown` are hidden** from Messages; they are still listed in
+Tests/Failures with their Site. The Development sidebar filters are **Site**
+(multi-select of the site folders) and **Search Jobs** (matches job title,
+company, or subject email). Use **Refresh jobs** after adding files. The email
+dumps are used only for Email detail / Overview. Production mode is unchanged
+and keeps its original Label / Search filters and Messages table.
+
+## Tests / Failures
+
+The left sidebar has a **Tests/Failures** button. It runs a suite of data
+checks against the current files and shows a pass/fail line for each one, plus
+the reason any individual file could not be displayed. Checks cover: the data
+directory, the site email directory (including sub-folders), the optional
+structured export folder, email `.txt` dump parsing, email CSV parsing, site
+email parsing / required job fields, the six-column Messages table, and an
+**All-unknown job fields** check that lists every job hidden from Messages
+because Job Title, Company, and Salary are all `Unknown`, together with the
+**Site** it came from and the email subject. While the panel is selected,
+the rest of the dashboard is hidden; click the button again to return to it.
+Reopen the panel after **Refresh data** / **Refresh jobs** to verify a new
+batch of files.
+
+The same checks can be run outside Streamlit:
+
+```bash
+python app/data_checks.py
+python app/data_checks.py --json
+python app/data_checks.py --data-dir data --site-dir data/site_emails
+python app/data_checks.py --extra-dir data/new_email_source
+```
+
 ## Run it
 
 ```bash
@@ -97,9 +179,21 @@ Only files directly inside `data/` are used; subdirectories (such as
    `DATA_DIR=/data` in `docker-compose.yml` (or
    `DATA_DIR=/path/to/folder` if running `streamlit run app/app.py` locally).
 3. Empty or buggy files show up under **Issues** with their filename.
+4. For Development's Messages table, drop raw job-alert emails into
+   `data/site_emails/<site>/*.txt` (sub-folders are scanned recursively), or a
+   multi-email structured export into `data/new_email_source/*.txt`. Use
+   **Refresh jobs** after adding files, and **Tests/Failures** to see any files
+   that could not be displayed and why.
 
 ## What the app shows
 
+- Sidebar **Mode** switch (Production / Development), plus a **Tests/Failures**
+  button that shows the check report and hides everything else until clicked
+  again. Production is the original dashboard (Sender / Label / Search
+  filters). Development filters by **Site** and **Search Jobs**, and adds an
+  **Overview** button next to Refresh data that switches between the two views:
+  messages/email detail (default) or the Overview metrics and charts. Only one
+  view is shown at a time.
 - Overview metrics: email count, unread count, unique senders, average size
 - Volume over time, top senders, and label breakdowns (labels include the
   CSV `Category` column)
@@ -114,7 +208,11 @@ Only files directly inside `data/` are used; subdirectories (such as
 ## Notes
 
 - Parsing is cached for 60 s (`ttl=60`) so the dashboard doesn't re-scan the
-  folder on every widget interaction; the Refresh button clears the cache.
+  folder on every widget interaction; the Refresh data / Refresh jobs buttons
+  clear the respective caches.
+- `data/site_emails/` and `data/new_email_source/` are gitignored — local
+  alert-email fixtures go there and are not committed. `data/label naming.csv`
+  is the one CSV kept in git.
 - The parser extracts balanced JSON objects with a quote-aware scanner, so
   braces inside message text don't confuse it.
 - Scaling up: if you collect thousands of dumps, the `load_emails` scan is
